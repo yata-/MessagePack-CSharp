@@ -1,4 +1,5 @@
-﻿using MessagePack.Internal;
+﻿using MessagePack.Formatters;
+using MessagePack.Internal;
 using System;
 using System.IO;
 
@@ -63,6 +64,14 @@ namespace MessagePack
             if (resolver == null) resolver = DefaultResolver;
             var formatter = resolver.GetFormatterWithVerify<T>();
 
+            return Serialize<T>(obj, formatter, resolver);
+        }
+
+        /// <summary>
+        /// Serialize to binary with root formatter and child resolver.
+        /// </summary>
+        public static byte[] Serialize<T>(T obj, IMessagePackFormatter<T> formatter, IFormatterResolver resolver)
+        {
             var buffer = InternalMemoryPool.GetBuffer();
 
             var len = formatter.Serialize(ref buffer, 0, obj, resolver);

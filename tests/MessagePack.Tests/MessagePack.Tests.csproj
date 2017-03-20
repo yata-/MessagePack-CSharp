@@ -103,6 +103,7 @@
     <Compile Include="AnonymousTypeTest.cs" />
     <Compile Include="CollectionTest.cs" />
     <Compile Include="DictionaryTest.cs" />
+    <Compile Include="DynamicSerializationTest.cs" />
     <Compile Include="ExtensionTests\ImmutableCollectionTest.cs" />
     <Compile Include="ExtensionTests\LZ4Test.cs" />
     <Compile Include="ExtensionTests\ReactivePropertyTest.cs" />
