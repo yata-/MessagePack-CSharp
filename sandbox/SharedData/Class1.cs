@@ -23,6 +23,11 @@ namespace SharedData
         public string Prop2 { get; set; }
         [Key(2)]
         public int Prop3 { get; set; }
+
+        public FirstSimpleData()
+        {
+            Console.WriteLine("yeah");
+        }
     }
 
     [MessagePackObject]

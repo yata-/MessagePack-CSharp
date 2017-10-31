@@ -86,6 +86,9 @@
     <Compile Include="..\..\src\MessagePack\Internal\ILGeneratorExtensions.cs">
       <Link>Code\ILGeneratorExtensions.cs</Link>
     </Compile>
+    <Compile Include="..\..\src\MessagePack\Internal\ILViewer.cs">
+      <Link>Code\ILViewer.cs</Link>
+    </Compile>
     <Compile Include="..\..\src\MessagePack\Internal\ReflectionExtensions.cs">
       <Link>Code\ReflectionExtensions.cs</Link>
     </Compile>

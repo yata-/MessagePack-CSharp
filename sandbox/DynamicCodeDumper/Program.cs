@@ -25,7 +25,7 @@ namespace DynamicCodeDumper
 
                 //DynamicObjectResolver.Instance.GetFormatter<NonEmpty1>();
                 //DynamicObjectResolver.Instance.GetFormatter<NonEmpty2>();
-                //DynamicObjectResolver.Instance.GetFormatter<FirstSimpleData>();
+                DynamicObjectResolver.Instance.GetFormatter<Callback1>();
                 //DynamicObjectResolver.Instance.GetFormatter<Version0>();
                 //DynamicObjectResolver.Instance.GetFormatter<Version1>();
                 //DynamicObjectResolver.Instance.GetFormatter<Version2>();
@@ -34,7 +34,7 @@ namespace DynamicCodeDumper
                 //DynamicObjectResolver.Instance.GetFormatter<SimlpeStringKeyData2>();
                 //DynamicObjectResolver.Instance.GetFormatter<StringKeySerializerTarget>();
                 //DynamicObjectResolver.Instance.GetFormatter<LongestString>();
-                var f = DynamicObjectResolverAllowPrivate.Instance.GetFormatter<MyClass>();
+                //var f = DynamicObjectResolverAllowPrivate.Instance.GetFormatter<MyClass>();
                 //DynamicObjectResolver.Instance.GetFormatter<StringKeySerializerTargetBinary>();
                 //DynamicObjectResolver.Instance.GetFormatter<Callback1>();
                 //DynamicObjectResolver.Instance.GetFormatter<Callback1_2>();
@@ -55,8 +55,6 @@ namespace DynamicCodeDumper
 
                 //DynamicContractlessObjectResolver.Instance.GetFormatter<EntityBase>();
 
-                byte[] b = null;
-                var bin = f.Serialize(ref b, 0, new MyClass { MyProperty1 = 100, MyProperty2 = "foo" }, null);
 
             }
             catch (Exception ex)

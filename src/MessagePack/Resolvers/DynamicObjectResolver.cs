@@ -826,6 +826,19 @@ namespace MessagePack.Internal
             il.EmitStloc(length);
             EmitOffsetPlusReadSize(il, argOffset, argReadSize);
 
+            // check side-effect-free for optimize set member value(reduce is-exists-member)
+            var isSideEffectFreeType = true;
+            if (info.BestmatchConstructor != null)
+            {
+                isSideEffectFreeType = IsSideEffectFreeConstructorType(info.BestmatchConstructor);
+                // if set only property, it is not side-effect but same as has side-effect
+                var hasSetOnlyMember = info.Members.Any(x => !x.IsReadable && x.IsWritable);
+                if (hasSetOnlyMember)
+                {
+                    isSideEffectFreeType = false;
+                }
+            }
+
             // make local fields
             Label? gotoDefault = null;
             DeserializeInfo[] infoList;
@@ -845,6 +858,7 @@ namespace MessagePack.Internal
                             {
                                 MemberInfo = member,
                                 LocalField = il.DeclareLocal(member.Type),
+                                IsDeserializedField = isSideEffectFreeType ? null : il.DeclareLocal(typeof(bool)),
                                 SwitchLabel = il.DefineLabel()
                             };
                         }
@@ -872,6 +886,7 @@ namespace MessagePack.Internal
                     {
                         MemberInfo = item,
                         LocalField = il.DeclareLocal(item.Type),
+                        IsDeserializedField = isSideEffectFreeType ? null : il.DeclareLocal(typeof(bool))
                         // SwitchLabel = il.DefineLabel()
                     })
                     .ToArray();
@@ -935,6 +950,11 @@ namespace MessagePack.Internal
                         if (infoList[i].MemberInfo != null)
                         {
                             EmitDeserializeValue(il, infoList[i], i, tryEmitLoadCustomFormatter, argBytes, argOffset, argResolver, argReadSize);
+                            if (!isSideEffectFreeType)
+                            {
+                                il.EmitTrue();
+                                il.EmitStloc(infoList[i].IsDeserializedField);
+                            }
                             il.Emit(OpCodes.Br, loopEnd);
                         }
                         else
@@ -1000,7 +1020,13 @@ namespace MessagePack.Internal
                         if (item.MemberInfo != null)
                         {
                             il.MarkLabel(item.SwitchLabel);
-                            EmitDeserializeValue(il, item, i++, tryEmitLoadCustomFormatter, argBytes, argOffset, argResolver, argReadSize);
+                            EmitDeserializeValue(il, item, i, tryEmitLoadCustomFormatter, argBytes, argOffset, argResolver, argReadSize);
+                            if (!isSideEffectFreeType)
+                            {
+                                il.EmitTrue();
+                                il.EmitStloc(infoList[i].IsDeserializedField);
+                            }
+                            i++;
                             il.Emit(OpCodes.Br, loopEnd);
                         }
                     }
@@ -1019,7 +1045,7 @@ namespace MessagePack.Internal
             il.Emit(OpCodes.Stind_I4);
 
             // create result object
-            var structLocal = EmitNewObject(il, type, info, infoList);
+            var resultField = EmitNewObject(il, type, info, infoList, isSideEffectFreeType);
 
             // IMessagePackSerializationCallbackReceiver.OnAfterDeserialize()
             if (type.GetTypeInfo().ImplementedInterfaces.Any(x => x == typeof(IMessagePackSerializationCallbackReceiver)))
@@ -1028,23 +1054,27 @@ namespace MessagePack.Internal
                 var runtimeMethods = type.GetRuntimeMethods().Where(x => x.Name == "OnAfterDeserialize").ToArray();
                 if (runtimeMethods.Length == 1)
                 {
-                    if (info.IsClass)
+                    if (resultField == null)
                     {
                         il.Emit(OpCodes.Dup);
                     }
                     else
                     {
-                        il.EmitLdloca(structLocal);
+                        il.EmitLdloca(resultField);
                     }
 
                     il.Emit(OpCodes.Call, runtimeMethods[0]); // don't use EmitCall helper(must use 'Call')
                 }
                 else
                 {
-                    if (info.IsStruct)
+                    if (info.IsStruct && resultField != null)
                     {
-                        il.EmitLdloc(structLocal);
+                        il.EmitLdloc(resultField);
                         il.Emit(OpCodes.Box, type);
+                    }
+                    else if (resultField != null)
+                    {
+                        il.EmitLdloc(resultField);
                     }
                     else
                     {
@@ -1054,9 +1084,9 @@ namespace MessagePack.Internal
                 }
             }
 
-            if (info.IsStruct)
+            if (resultField != null)
             {
-                il.Emit(OpCodes.Ldloc, structLocal);
+                il.Emit(OpCodes.Ldloc, resultField);
             }
 
 
@@ -1114,25 +1144,50 @@ namespace MessagePack.Internal
             il.EmitStloc(info.LocalField);
         }
 
-        static LocalBuilder EmitNewObject(ILGenerator il, Type type, ObjectSerializationInfo info, DeserializeInfo[] members)
+        static LocalBuilder EmitNewObject(ILGenerator il, Type type, ObjectSerializationInfo info, DeserializeInfo[] members, bool isSideEffectFreeType)
         {
             if (info.IsClass)
             {
+                LocalBuilder result = null;
+                if (!isSideEffectFreeType)
+                {
+                    result = il.DeclareLocal(type);
+                }
+
                 foreach (var item in info.ConstructorParameters)
                 {
                     var local = members.First(x => x.MemberInfo == item);
                     il.EmitLdloc(local.LocalField);
                 }
                 il.Emit(OpCodes.Newobj, info.BestmatchConstructor);
+                if (!isSideEffectFreeType)
+                {
+                    il.EmitStloc(result);
+                }
 
                 foreach (var item in members.Where(x => x.MemberInfo != null && x.MemberInfo.IsWritable))
                 {
-                    il.Emit(OpCodes.Dup);
-                    il.EmitLdloc(item.LocalField);
-                    item.MemberInfo.EmitStoreValue(il);
+                    if (isSideEffectFreeType)
+                    {
+                        il.Emit(OpCodes.Dup);
+                        il.EmitLdloc(item.LocalField);
+                        item.MemberInfo.EmitStoreValue(il);
+                    }
+                    else
+                    {
+                        var next = il.DefineLabel();
+                        il.EmitLdloc(item.IsDeserializedField);
+                        il.Emit(OpCodes.Brfalse, next);
+
+                        il.EmitLdloc(result);
+                        il.EmitLdloc(item.LocalField);
+                        item.MemberInfo.EmitStoreValue(il);
+
+                        il.MarkLabel(next);
+                    }
                 }
 
-                return null;
+                return result;
             }
             else
             {
@@ -1155,9 +1210,24 @@ namespace MessagePack.Internal
 
                 foreach (var item in members.Where(x => x.MemberInfo != null && x.MemberInfo.IsWritable))
                 {
-                    il.EmitLdloca(result);
-                    il.EmitLdloc(item.LocalField);
-                    item.MemberInfo.EmitStoreValue(il);
+                    if (isSideEffectFreeType)
+                    {
+                        il.EmitLdloca(result);
+                        il.EmitLdloc(item.LocalField);
+                        item.MemberInfo.EmitStoreValue(il);
+                    }
+                    else
+                    {
+                        var next = il.DefineLabel();
+                        il.EmitLdloc(item.IsDeserializedField);
+                        il.Emit(OpCodes.Brfalse, next);
+
+                        il.EmitLdloca(result);
+                        il.EmitLdloc(item.LocalField);
+                        item.MemberInfo.EmitStoreValue(il);
+
+                        il.MarkLabel(next);
+                    }
                 }
 
                 return result; // struct returns local result field
@@ -1186,6 +1256,66 @@ namespace MessagePack.Internal
             {
                 return true;
             }
+            return false;
+        }
+
+        static bool IsSideEffectFreeConstructorType(ConstructorInfo ctorInfo)
+        {
+            var methodBody = ctorInfo.GetMethodBody();
+            if (methodBody == null) return false; // can't analysis
+
+            var array = methodBody.GetILAsByteArray();
+            if (array == null) return false;
+
+            // (ldarg.0, call(empty ctor), ret) == side-effect free.
+            // Release build is 7, Debug build has nop(or nop like code) so should use ILStreamReader
+            var opCodes = new List<OpCode>();
+            using (var reader = new ILStreamReader(array))
+            {
+                while (!reader.EndOfStream)
+                {
+                    var code = reader.ReadOpCode();
+                    if (code != OpCodes.Nop
+                     && code != OpCodes.Ldloc_0
+                     && code != OpCodes.Ldloc_S
+                     && code != OpCodes.Stloc_0
+                     && code != OpCodes.Stloc_S
+                     && code != OpCodes.Blt
+                     && code != OpCodes.Blt_S
+                     && code != OpCodes.Bgt
+                     && code != OpCodes.Bgt_S)
+                    {
+                        opCodes.Add(code);
+                        if (opCodes.Count == 4) break;
+                    }
+                }
+            }
+
+            if (opCodes.Count == 3
+             && opCodes[0] == System.Reflection.Emit.OpCodes.Ldarg_0
+             && opCodes[1] == System.Reflection.Emit.OpCodes.Call
+             && opCodes[2] == System.Reflection.Emit.OpCodes.Ret)
+            {
+                if (ctorInfo.DeclaringType.BaseType == typeof(object))
+                {
+                    return true;
+                }
+                else
+                {
+                    // use empty constuctor.
+                    var bassCtorInfo = ctorInfo.DeclaringType.BaseType.GetConstructor(Type.EmptyTypes);
+                    if (bassCtorInfo == null)
+                    {
+                        return false;
+                    }
+                    else
+                    {
+                        // check parent constructor
+                        return IsSideEffectFreeConstructorType(bassCtorInfo);
+                    }
+                }
+            }
+
             return false;
         }
 
@@ -1257,6 +1387,7 @@ typeof(int), typeof(int) });
         {
             public ObjectSerializationInfo.EmittableMember MemberInfo { get; set; }
             public LocalBuilder LocalField { get; set; }
+            public LocalBuilder IsDeserializedField;
             public Label SwitchLabel { get; set; }
         }
     }
