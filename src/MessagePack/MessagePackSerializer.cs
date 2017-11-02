@@ -1,5 +1,6 @@
 ﻿using MessagePack.Internal;
 using System;
+using System.Buffers;
 using System.IO;
 
 namespace MessagePack
@@ -47,6 +48,17 @@ namespace MessagePack
             defaultResolver = resolver;
         }
 
+        public static ArrayPool<byte> DefaultBufferPool { get; set; }
+        public static int DefaultBufferPoolMinimumLength { get; set; }
+        public static bool IsClearBufferWhenReturning { get; set; }
+
+        static MessagePackSerializer()
+        {
+            DefaultBufferPoolMinimumLength = UnsafeThreadStatic64KMemoryPool.BufferSize;
+            DefaultBufferPool = ArrayPool<byte>.Shared;
+            IsClearBufferWhenReturning = false;
+        }
+
         /// <summary>
         /// Serialize to binary with default resolver.
         /// </summary>
@@ -60,15 +72,45 @@ namespace MessagePack
         /// </summary>
         public static byte[] Serialize<T>(T obj, IFormatterResolver resolver)
         {
+            // use ThreadStatic path
+            if (DefaultBufferPoolMinimumLength == UnsafeThreadStatic64KMemoryPool.BufferSize)
+            {
+                var buffer = SerializeUnsafe(obj, resolver);
+                return MessagePackBinary.FastCloneWithResize(buffer.Array, buffer.Count);
+            }
+            else
+            {
+                return Serialize(obj, resolver, DefaultBufferPool, DefaultBufferPoolMinimumLength);
+            }
+        }
+
+        /// <summary>
+        /// Serialize to binary with specified resolver and buffer pool.
+        /// </summary>
+        public static byte[] Serialize<T>(T obj, ArrayPool<byte> pool, int minimumLength)
+        {
+            return Serialize<T>(obj, defaultResolver, pool, minimumLength);
+        }
+
+        /// <summary>
+        /// Serialize to binary with specified resolver and buffer pool.
+        /// </summary>
+        public static byte[] Serialize<T>(T obj, IFormatterResolver resolver, ArrayPool<byte> pool, int minimumLength)
+        {
             if (resolver == null) resolver = DefaultResolver;
             var formatter = resolver.GetFormatterWithVerify<T>();
 
-            var buffer = InternalMemoryPool.GetBuffer();
-
-            var len = formatter.Serialize(ref buffer, 0, obj, resolver);
-
-            // do not return MemoryPool.Buffer.
-            return MessagePackBinary.FastCloneWithResize(buffer, len);
+            var rentBuffer = pool.Rent(minimumLength);
+            var buffer = rentBuffer;
+            try
+            {
+                var len = formatter.Serialize(ref buffer, 0, obj, resolver);
+                return MessagePackBinary.FastCloneWithResize(buffer, len);
+            }
+            finally
+            {
+                pool.Return(rentBuffer);
+            }
         }
 
         /// <summary>
@@ -84,11 +126,26 @@ namespace MessagePack
         /// </summary>
         public static ArraySegment<byte> SerializeUnsafe<T>(T obj, IFormatterResolver resolver)
         {
+            return SerializeUnsafe(obj, resolver, UnsafeThreadStatic64KMemoryPool.Instance.GetBuffer());
+        }
+
+        /// <summary>
+        /// Serialize to binary. Get the raw memory pool byte[]. The result can not share across thread and can not hold, so use quickly.
+        /// </summary>
+        public static ArraySegment<byte> SerializeUnsafe<T>(T obj, byte[] initialWorkingBuffer)
+        {
+            return SerializeUnsafe(obj, defaultResolver, initialWorkingBuffer);
+        }
+
+        /// <summary>
+        /// Serialize to binary with specified resolver. Get the raw memory pool byte[]. The result can not share across thread and can not hold, so use quickly.
+        /// </summary>
+        public static ArraySegment<byte> SerializeUnsafe<T>(T obj, IFormatterResolver resolver, byte[] initialWorkingBuffer)
+        {
             if (resolver == null) resolver = DefaultResolver;
             var formatter = resolver.GetFormatterWithVerify<T>();
 
-            var buffer = InternalMemoryPool.GetBuffer();
-
+            var buffer = initialWorkingBuffer;
             var len = formatter.Serialize(ref buffer, 0, obj, resolver);
 
             // return raw memory pool, unsafe!
@@ -108,15 +165,47 @@ namespace MessagePack
         /// </summary>
         public static void Serialize<T>(Stream stream, T obj, IFormatterResolver resolver)
         {
+            // use ThreadStatic path
+            if (DefaultBufferPoolMinimumLength == UnsafeThreadStatic64KMemoryPool.BufferSize)
+            {
+                var buffer = SerializeUnsafe(obj, resolver);
+                stream.Write(buffer.Array, buffer.Offset, buffer.Count);
+            }
+            else
+            {
+                Serialize(stream, obj, resolver, DefaultBufferPool, DefaultBufferPoolMinimumLength);
+            }
+        }
+
+        /// <summary>
+        /// Serialize to stream with specified resolver.
+        /// </summary>
+        public static void Serialize<T>(Stream stream, T obj, ArrayPool<byte> pool, int minimumLength)
+        {
+            Serialize<T>(stream, obj, defaultResolver, pool, minimumLength);
+        }
+
+        /// <summary>
+        /// Serialize to stream with specified resolver.
+        /// </summary>
+        public static void Serialize<T>(Stream stream, T obj, IFormatterResolver resolver, ArrayPool<byte> pool, int minimumLength)
+        {
             if (resolver == null) resolver = DefaultResolver;
             var formatter = resolver.GetFormatterWithVerify<T>();
 
-            var buffer = InternalMemoryPool.GetBuffer();
+            var rentBuffer = pool.Rent(minimumLength);
+            var buffer = rentBuffer;
+            try
+            {
+                var len = formatter.Serialize(ref buffer, 0, obj, resolver);
 
-            var len = formatter.Serialize(ref buffer, 0, obj, resolver);
-
-            // do not need resize.
-            stream.Write(buffer, 0, len);
+                // do not need resize.
+                stream.Write(buffer, 0, len);
+            }
+            finally
+            {
+                pool.Return(rentBuffer, IsClearBufferWhenReturning);
+            }
         }
 
 #if NETSTANDARD
@@ -132,12 +221,28 @@ namespace MessagePack
         /// <summary>
         /// Serialize to stream(async) with specified resolver.
         /// </summary>
-        public static async System.Threading.Tasks.Task SerializeAsync<T>(Stream stream, T obj, IFormatterResolver resolver)
+        public static System.Threading.Tasks.Task SerializeAsync<T>(Stream stream, T obj, IFormatterResolver resolver)
+        {
+            return SerializeAsync<T>(stream, obj, resolver, DefaultBufferPool, DefaultBufferPoolMinimumLength);
+        }
+
+        /// <summary>
+        /// Serialize to stream(async) with specified resolver.
+        /// </summary>
+        public static System.Threading.Tasks.Task SerializeAsync<T>(Stream stream, T obj, ArrayPool<byte> pool, int minimumLength)
+        {
+            return SerializeAsync<T>(stream, obj, defaultResolver, pool, minimumLength);
+        }
+
+        /// <summary>
+        /// Serialize to stream(async) with specified resolver.
+        /// </summary>
+        public static async System.Threading.Tasks.Task SerializeAsync<T>(Stream stream, T obj, IFormatterResolver resolver, ArrayPool<byte> pool, int minimumLength)
         {
             if (resolver == null) resolver = DefaultResolver;
             var formatter = resolver.GetFormatterWithVerify<T>();
 
-            var rentBuffer = BufferPool.Default.Rent();
+            var rentBuffer = pool.Rent(minimumLength);
             try
             {
                 var buffer = rentBuffer;
@@ -148,7 +253,7 @@ namespace MessagePack
             }
             finally
             {
-                BufferPool.Default.Return(rentBuffer);
+                pool.Return(rentBuffer);
             }
         }
 
@@ -194,39 +299,50 @@ namespace MessagePack
 
         public static T Deserialize<T>(Stream stream, bool readStrict)
         {
-            return Deserialize<T>(stream, defaultResolver, readStrict);
+            return Deserialize<T>(stream, defaultResolver, false);
         }
 
         public static T Deserialize<T>(Stream stream, IFormatterResolver resolver, bool readStrict)
+        {
+            if (DefaultBufferPoolMinimumLength == UnsafeThreadStatic64KMemoryPool.BufferSize && !readStrict)
+            {
+                if (resolver == null) resolver = DefaultResolver;
+                var formatter = resolver.GetFormatterWithVerify<T>();
+
+                var rentBuffer = UnsafeThreadStatic64KMemoryPool.Instance.GetBuffer();
+                var buffer = rentBuffer;
+
+                FillFromStream(stream, ref buffer);
+
+                int readSize;
+                return formatter.Deserialize(buffer, 0, resolver, out readSize);
+            }
+            else
+            {
+                return Deserialize<T>(stream, defaultResolver, readStrict, DefaultBufferPool, DefaultBufferPoolMinimumLength);
+            }
+        }
+
+        public static T Deserialize<T>(Stream stream, IFormatterResolver resolver, bool readStrict, ArrayPool<byte> pool, int minimumLength)
         {
             if (resolver == null) resolver = DefaultResolver;
             var formatter = resolver.GetFormatterWithVerify<T>();
 
             if (!readStrict)
             {
-#if NETSTANDARD && !NET45
-
-                var ms = stream as MemoryStream;
-                if (ms != null)
+                var rentBuffer = pool.Rent(minimumLength);
+                var buffer = rentBuffer;
+                try
                 {
-                    // optimize for MemoryStream
-                    ArraySegment<byte> buffer;
-                    if (ms.TryGetBuffer(out buffer))
-                    {
-                        int readSize;
-                        return formatter.Deserialize(buffer.Array, buffer.Offset, resolver, out readSize);
-                    }
-                }
-#endif
-
-                // no else.
-                {
-                    var buffer = InternalMemoryPool.GetBuffer();
 
                     FillFromStream(stream, ref buffer);
 
                     int readSize;
                     return formatter.Deserialize(buffer, 0, resolver, out readSize);
+                }
+                finally
+                {
+                    pool.Return(rentBuffer, IsClearBufferWhenReturning);
                 }
             }
             else
@@ -247,9 +363,19 @@ namespace MessagePack
 
         // readStrict async read is too slow(many Task garbage) so I don't provide async option.
 
-        public static async System.Threading.Tasks.Task<T> DeserializeAsync<T>(Stream stream, IFormatterResolver resolver)
+        public static System.Threading.Tasks.Task<T> DeserializeAsync<T>(Stream stream, IFormatterResolver resolver)
         {
-            var rentBuffer = BufferPool.Default.Rent();
+            return DeserializeAsync<T>(stream, resolver, DefaultBufferPool, DefaultBufferPoolMinimumLength);
+        }
+
+        public static System.Threading.Tasks.Task<T> DeserializeAsync<T>(Stream stream, ArrayPool<byte> pool, int minimumLength)
+        {
+            return DeserializeAsync<T>(stream, defaultResolver, DefaultBufferPool, DefaultBufferPoolMinimumLength);
+        }
+
+        public static async System.Threading.Tasks.Task<T> DeserializeAsync<T>(Stream stream, IFormatterResolver resolver, ArrayPool<byte> pool, int minimumLength)
+        {
+            var rentBuffer = pool.Rent(minimumLength);
             var buf = rentBuffer;
             try
             {
@@ -268,7 +394,7 @@ namespace MessagePack
             }
             finally
             {
-                BufferPool.Default.Return(rentBuffer);
+                pool.Return(rentBuffer);
             }
         }
 
@@ -288,24 +414,6 @@ namespace MessagePack
             }
 
             return length;
-        }
-    }
-}
-
-namespace MessagePack.Internal
-{
-    internal static class InternalMemoryPool
-    {
-        [ThreadStatic]
-        static byte[] buffer = null;
-
-        public static byte[] GetBuffer()
-        {
-            if (buffer == null)
-            {
-                buffer = new byte[65536];
-            }
-            return buffer;
         }
     }
 }
