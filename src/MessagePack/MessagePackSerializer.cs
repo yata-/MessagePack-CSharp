@@ -52,9 +52,14 @@ namespace MessagePack
         public static int DefaultBufferPoolMinimumLength { get; set; }
         public static bool IsClearBufferWhenReturning { get; set; }
 
+        const int ThreadStaticBufferSize = 65535;
+
+        [ThreadStatic]
+        static byte[] ThreadStaticBuffer;
+
         static MessagePackSerializer()
         {
-            DefaultBufferPoolMinimumLength = UnsafeThreadStatic64KMemoryPool.BufferSize;
+            DefaultBufferPoolMinimumLength = ThreadStaticBufferSize;
             DefaultBufferPool = ArrayPool<byte>.Shared;
             IsClearBufferWhenReturning = false;
         }
@@ -73,7 +78,7 @@ namespace MessagePack
         public static byte[] Serialize<T>(T obj, IFormatterResolver resolver)
         {
             // use ThreadStatic path
-            if (DefaultBufferPoolMinimumLength == UnsafeThreadStatic64KMemoryPool.BufferSize)
+            if (DefaultBufferPoolMinimumLength == ThreadStaticBufferSize)
             {
                 var buffer = SerializeUnsafe(obj, resolver);
                 return MessagePackBinary.FastCloneWithResize(buffer.Array, buffer.Count);
@@ -109,7 +114,7 @@ namespace MessagePack
             }
             finally
             {
-                pool.Return(rentBuffer);
+                pool.Return(rentBuffer, IsClearBufferWhenReturning);
             }
         }
 
@@ -124,9 +129,16 @@ namespace MessagePack
         /// <summary>
         /// Serialize to binary with specified resolver. Get the raw memory pool byte[]. The result can not share across thread and can not hold, so use quickly.
         /// </summary>
+        [Obsolete]
         public static ArraySegment<byte> SerializeUnsafe<T>(T obj, IFormatterResolver resolver)
         {
-            return SerializeUnsafe(obj, resolver, UnsafeThreadStatic64KMemoryPool.Instance.GetBuffer());
+            var bytes = ThreadStaticBuffer;
+            if (bytes == null)
+            {
+                bytes = ThreadStaticBuffer = new byte[ThreadStaticBufferSize];
+            }
+
+            return SerializeUnsafe(obj, resolver, bytes);
         }
 
         /// <summary>
@@ -166,7 +178,7 @@ namespace MessagePack
         public static void Serialize<T>(Stream stream, T obj, IFormatterResolver resolver)
         {
             // use ThreadStatic path
-            if (DefaultBufferPoolMinimumLength == UnsafeThreadStatic64KMemoryPool.BufferSize)
+            if (DefaultBufferPoolMinimumLength == ThreadStaticBufferSize)
             {
                 var buffer = SerializeUnsafe(obj, resolver);
                 stream.Write(buffer.Array, buffer.Offset, buffer.Count);
@@ -253,7 +265,7 @@ namespace MessagePack
             }
             finally
             {
-                pool.Return(rentBuffer);
+                pool.Return(rentBuffer, IsClearBufferWhenReturning);
             }
         }
 
@@ -304,13 +316,16 @@ namespace MessagePack
 
         public static T Deserialize<T>(Stream stream, IFormatterResolver resolver, bool readStrict)
         {
-            if (DefaultBufferPoolMinimumLength == UnsafeThreadStatic64KMemoryPool.BufferSize && !readStrict)
+            if (DefaultBufferPoolMinimumLength == ThreadStaticBufferSize && !readStrict)
             {
                 if (resolver == null) resolver = DefaultResolver;
                 var formatter = resolver.GetFormatterWithVerify<T>();
 
-                var rentBuffer = UnsafeThreadStatic64KMemoryPool.Instance.GetBuffer();
-                var buffer = rentBuffer;
+                var buffer = ThreadStaticBuffer;
+                if (buffer == null)
+                {
+                    buffer = ThreadStaticBuffer = new byte[ThreadStaticBufferSize];
+                }
 
                 FillFromStream(stream, ref buffer);
 
@@ -394,7 +409,7 @@ namespace MessagePack
             }
             finally
             {
-                pool.Return(rentBuffer);
+                pool.Return(rentBuffer, IsClearBufferWhenReturning);
             }
         }
 
