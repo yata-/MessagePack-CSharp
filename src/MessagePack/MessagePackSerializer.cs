@@ -129,7 +129,6 @@ namespace MessagePack
         /// <summary>
         /// Serialize to binary with specified resolver. Get the raw memory pool byte[]. The result can not share across thread and can not hold, so use quickly.
         /// </summary>
-        [Obsolete]
         public static ArraySegment<byte> SerializeUnsafe<T>(T obj, IFormatterResolver resolver)
         {
             var bytes = ThreadStaticBuffer;
@@ -311,7 +310,7 @@ namespace MessagePack
 
         public static T Deserialize<T>(Stream stream, bool readStrict)
         {
-            return Deserialize<T>(stream, defaultResolver, false);
+            return Deserialize<T>(stream, defaultResolver, readStrict);
         }
 
         public static T Deserialize<T>(Stream stream, IFormatterResolver resolver, bool readStrict)

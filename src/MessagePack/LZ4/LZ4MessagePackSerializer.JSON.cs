@@ -34,33 +34,42 @@ namespace MessagePack
         {
             if (bytes == null || bytes.Length == 0) return "";
 
-            int readSize;
-            if (MessagePackBinary.GetMessagePackType(bytes, 0) == MessagePackType.Extension)
+            var pool = MessagePackSerializer.DefaultBufferPool;
+            byte[] rentBuffer = null;
+            try
             {
-                var header = MessagePackBinary.ReadExtensionFormatHeader(bytes, 0, out readSize);
-                if (header.TypeCode == ExtensionTypeCode)
+                int readSize;
+                if (MessagePackBinary.GetMessagePackType(bytes, 0) == MessagePackType.Extension)
                 {
-                    // decode lz4
-                    var offset = readSize;
-                    var length = MessagePackBinary.ReadInt32(bytes, offset, out readSize);
-                    offset += readSize;
-
-                    var buffer = LZ4MemoryPool.GetBuffer();
-                    if (buffer.Length < length)
+                    var header = MessagePackBinary.ReadExtensionFormatHeader(bytes, 0, out readSize);
+                    if (header.TypeCode == ExtensionTypeCode)
                     {
-                        buffer = new byte[length];
+                        // decode lz4
+                        var offset = readSize;
+                        var length = MessagePackBinary.ReadInt32(bytes, offset, out readSize);
+                        offset += readSize;
+
+                        rentBuffer = pool.Rent(length);
+                        var buffer = rentBuffer;
+
+                        // LZ4 Decode
+                        LZ4Codec.Decode(bytes, offset, bytes.Length - offset, buffer, 0, length);
+
+                        bytes = buffer; // use LZ4 bytes
                     }
+                }
 
-                    // LZ4 Decode
-                    LZ4Codec.Decode(bytes, offset, bytes.Length - offset, buffer, 0, length);
-
-                    bytes = buffer; // use LZ4 bytes
+                var sb = new StringBuilder();
+                ToJsonCore(bytes, 0, sb);
+                return sb.ToString();
+            }
+            finally
+            {
+                if (rentBuffer != null)
+                {
+                    pool.Return(rentBuffer, MessagePackSerializer.IsClearBufferWhenReturning);
                 }
             }
-
-            var sb = new StringBuilder();
-            ToJsonCore(bytes, 0, sb);
-            return sb.ToString();
         }
 
         public static byte[] FromJson(string str)

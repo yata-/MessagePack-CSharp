@@ -67,7 +67,14 @@ namespace MessagePack
         internal static ArraySegment<byte> FromJsonUnsafe(TextReader reader)
         {
             var offset = 0;
-            byte[] binary = UnsafeThreadStatic64KMemoryPool.Instance.GetBuffer();
+
+            // use threadstatic is not good...
+            var binary = ThreadStaticBuffer;
+            if (binary == null)
+            {
+                binary = ThreadStaticBuffer = new byte[ThreadStaticBufferSize];
+            }
+
             using (var jr = new TinyJsonReader(reader, false))
             {
                 FromJsonCore(jr, ref binary, ref offset);
