@@ -259,41 +259,45 @@ namespace MessagePack
             if (bytes == null)
             {
                 bytes = new byte[newLength];
+            }
+            else if (newLength > bytes.Length)
+            {
+                ResizeCore(ref bytes, newLength);
+            }
+        }
+
+        static void ResizeCore(ref byte[] bytes, int newLength)
+        {
+            // like MemoryStream.EnsureCapacity
+            var current = bytes.Length;
+
+            int num = newLength;
+            if (num < 256)
+            {
+                num = 256;
+                FastResize(ref bytes, num);
                 return;
             }
 
-            // like MemoryStream.EnsureCapacity
-            var current = bytes.Length;
-            if (newLength > current)
+            if (current == ArrayMaxSize)
             {
-                int num = newLength;
-                if (num < 256)
-                {
-                    num = 256;
-                    FastResize(ref bytes, num);
-                    return;
-                }
-
-                if (current == ArrayMaxSize)
-                {
-                    throw new InvalidOperationException("byte[] size reached maximum size of array(0x7FFFFFC7), can not write to single byte[]. Details: https://msdn.microsoft.com/en-us/library/system.array");
-                }
-
-                var newSize = unchecked((current * 2));
-                if (newSize < 0) // overflow
-                {
-                    num = ArrayMaxSize;
-                }
-                else
-                {
-                    if (num < newSize)
-                    {
-                        num = newSize;
-                    }
-                }
-
-                FastResize(ref bytes, num);
+                throw new InvalidOperationException("byte[] size reached maximum size of array(0x7FFFFFC7), can not write to single byte[]. Details: https://msdn.microsoft.com/en-us/library/system.array");
             }
+
+            var newSize = unchecked((current * 2));
+            if (newSize < 0) // overflow
+            {
+                num = ArrayMaxSize;
+            }
+            else
+            {
+                if (num < newSize)
+                {
+                    num = newSize;
+                }
+            }
+
+            FastResize(ref bytes, num);
         }
 
         // Buffer.BlockCopy version of Array.Resize
