@@ -1,8 +1,8 @@
-﻿using System;
+﻿using Microsoft.Build.Locator;
+using System;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using Microsoft.Build.MSBuildLocator;
 
 namespace MessagePack.CodeGenerator
 {

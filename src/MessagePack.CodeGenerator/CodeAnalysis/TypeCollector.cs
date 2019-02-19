@@ -519,7 +519,7 @@ namespace MessagePack.CodeGenerator
                     };
                     if (!member.IsReadable && !member.IsWritable) continue;
                     member.IntKey = hiddenIntKey++;
-                    stringMembers.Add(member.StringKey, member);
+                    stringMembers[member.StringKey] = member;
                     CollectCore(item.Type); // recursive collect
                 }
             }
