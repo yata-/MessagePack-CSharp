@@ -26,9 +26,11 @@ namespace MessagePackCompiler.CodeAnalysis
         internal readonly INamedTypeSymbol Task;
         internal readonly INamedTypeSymbol TaskOfT;
         internal readonly INamedTypeSymbol MessagePackObjectAttribute;
+        internal readonly INamedTypeSymbol DataContractAttribute;
         internal readonly INamedTypeSymbol UnionAttribute;
         internal readonly INamedTypeSymbol SerializationConstructorAttribute;
         internal readonly INamedTypeSymbol KeyAttribute;
+        internal readonly INamedTypeSymbol DataMemberAttribute;
         internal readonly INamedTypeSymbol IgnoreAttribute;
         internal readonly INamedTypeSymbol IgnoreDataMemberAttribute;
         internal readonly INamedTypeSymbol IMessagePackSerializationCallbackReceiver;
@@ -55,6 +57,12 @@ namespace MessagePackCompiler.CodeAnalysis
                 throw new InvalidOperationException("failed to get metadata of MessagePack.MessagePackObjectAttribute");
             }
 
+            DataContractAttribute = compilation.GetTypeByMetadataName("System.Runtime.Serialization.DataContractAttribute");
+            if (MessagePackObjectAttribute == null)
+            {
+                throw new InvalidOperationException("failed to get metadata of System.Runtime.Serialization.DataContractAttribute");
+            }
+
             UnionAttribute = compilation.GetTypeByMetadataName("MessagePack.UnionAttribute");
             if (UnionAttribute == null)
             {
@@ -71,6 +79,12 @@ namespace MessagePackCompiler.CodeAnalysis
             if (KeyAttribute == null)
             {
                 throw new InvalidOperationException("failed to get metadata of MessagePack.KeyAttribute");
+            }
+            
+            DataMemberAttribute = compilation.GetTypeByMetadataName("System.Runtime.Serialization.DataMemberAttribute");
+            if (DataMemberAttribute == null)
+            {
+                throw new InvalidOperationException("failed to get metadata of System.Runtime.Serialization.DataMemberAttribute");
             }
 
             IgnoreAttribute = compilation.GetTypeByMetadataName("MessagePack.IgnoreMemberAttribute");
@@ -298,7 +312,10 @@ namespace MessagePackCompiler.CodeAnalysis
                        ((x.TypeKind == TypeKind.Interface) && x.GetAttributes().Any(x2 => x2.AttributeClass.ApproximatelyEqual(typeReferences.UnionAttribute)))
                     || ((x.TypeKind == TypeKind.Class && x.IsAbstract) && x.GetAttributes().Any(x2 => x2.AttributeClass.ApproximatelyEqual(typeReferences.UnionAttribute)))
                     || ((x.TypeKind == TypeKind.Class) && x.GetAttributes().Any(x2 => x2.AttributeClass.ApproximatelyEqual(typeReferences.MessagePackObjectAttribute)))
-                    || ((x.TypeKind == TypeKind.Struct) && x.GetAttributes().Any(x2 => x2.AttributeClass.ApproximatelyEqual(typeReferences.MessagePackObjectAttribute))))
+                    || ((x.TypeKind == TypeKind.Struct) && x.GetAttributes().Any(x2 => x2.AttributeClass.ApproximatelyEqual(typeReferences.MessagePackObjectAttribute)))
+                    || ((x.TypeKind == TypeKind.Class) && x.GetAttributes().Any(x2 => x2.AttributeClass.ApproximatelyEqual(typeReferences.DataContractAttribute)))
+                    || ((x.TypeKind == TypeKind.Struct) && x.GetAttributes().Any(x2 => x2.AttributeClass.ApproximatelyEqual(typeReferences.DataContractAttribute)))
+                       )
                 .ToArray();
         }
 
@@ -620,6 +637,7 @@ namespace MessagePackCompiler.CodeAnalysis
             var isIntKey = true;
             var intMembers = new Dictionary<int, MemberSerializationInfo>();
             var stringMembers = new Dictionary<string, MemberSerializationInfo>();
+            var dataMemberIndex = 0;
 
             if (this.isForceUseMap || (bool)contractAttr.ConstructorArguments[0].Value)
             {
@@ -732,14 +750,27 @@ namespace MessagePackCompiler.CodeAnalysis
                         continue;
                     }
 
+                    int? intKey = null;
+                    string stringKey = null;
+                    var dataMemberAttribute = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.DataMemberAttribute));
+                    if (dataMemberAttribute != null)
+                    {
+                        intKey = dataMemberIndex;
+                        dataMemberIndex++;
+                        member.IntKey = (int)intKey;
+                        intMembers.Add(member.IntKey, member);
+                        this.CollectCore(item.Type); // recursive collect
+                        continue;
+                    }
+
                     TypedConstant? key = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.KeyAttribute))?.ConstructorArguments[0];
                     if (key == null)
                     {
                         throw new MessagePackGeneratorResolveFailedException("all public members must mark KeyAttribute or IgnoreMemberAttribute." + " type: " + type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) + " member:" + item.Name);
                     }
 
-                    var intKey = (key.Value.Value is int) ? (int)key.Value.Value : (int?)null;
-                    var stringKey = (key.Value.Value is string) ? (string)key.Value.Value : (string)null;
+                    intKey = (key.Value.Value is int) ? (int)key.Value.Value : (int?)null;
+                    stringKey = (key.Value.Value is string) ? (string)key.Value.Value : (string)null;
                     if (intKey == null && stringKey == null)
                     {
                         throw new MessagePackGeneratorResolveFailedException("both IntKey and StringKey are null." + " type: " + type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) + " member:" + item.Name);
